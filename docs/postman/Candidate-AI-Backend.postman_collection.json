@@ -1,0 +1,245 @@
+{
+  "info": {
+    "name": "Candidate AI Backend",
+    "_postman_id": "8c61c9a7-8d39-4f7a-9c8f-1c2c0d80a111",
+    "description": "Postman collection for the Django-based AI hiring assistant backend.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "job_id",
+      "value": "2"
+    },
+    {
+      "key": "job_title",
+      "value": "Python Developer"
+    }
+  ],
+  "item": [
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/health/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"sidra1\",\n  \"email\": \"sidra1@example.com\",\n  \"password\": \"test12345\"\n}"
+            },
+            "url": "{{base_url}}/api/auth/register/"
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"sidra1\",\n  \"password\": \"test12345\"\n}"
+            },
+            "url": "{{base_url}}/api/auth/login/"
+          }
+        },
+        {
+          "name": "Me",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/auth/me/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Jobs",
+      "item": [
+        {
+          "name": "Create Job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Python Developer\",\n  \"description\": \"Need Python, Django, and PostgreSQL skills\",\n  \"required_skills\": [\"Python\", \"Django\", \"PostgreSQL\"]\n}"
+            },
+            "url": "{{base_url}}/api/jobs/"
+          }
+        },
+        {
+          "name": "List Jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/jobs/"
+          }
+        },
+        {
+          "name": "Dashboard Overview",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/jobs/dashboard/"
+          }
+        },
+        {
+          "name": "Job Detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/jobs/{{job_id}}/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Candidates",
+      "item": [
+        {
+          "name": "Apply Candidate",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "job_id",
+                  "value": "{{job_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "full_name",
+                  "value": "Ahmed Khan",
+                  "type": "text"
+                },
+                {
+                  "key": "email",
+                  "value": "ahmed@gmail.com",
+                  "type": "text"
+                },
+                {
+                  "key": "skills",
+                  "value": "Python,Django,PostgreSQL",
+                  "type": "text"
+                },
+                {
+                  "key": "resume",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": "{{base_url}}/api/candidates/apply/"
+          }
+        },
+        {
+          "name": "List Candidates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/candidates/?job_id={{job_id}}"
+          }
+        },
+        {
+          "name": "Candidate Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/api/candidates/1/summary/"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Chatbot",
+      "item": [
+        {
+          "name": "Search Candidates",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"best python django candidate\",\n  \"job_id\": {{job_id}},\n  \"limit\": 5\n}"
+            },
+            "url": "{{base_url}}/api/chatbot/search/"
+          }
+        },
+        {
+          "name": "Search Candidates By Job Title",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"best python django candidate\",\n  \"job_title\": \"{{job_title}}\",\n  \"limit\": 5\n}"
+            },
+            "url": "{{base_url}}/api/chatbot/search/"
+          }
+        },
+        {
+          "name": "Compare Candidates",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"candidate_ids\": [1, 2, 3],\n  \"query\": \"Compare python django backend candidates for job 1\"\n}"
+            },
+            "url": "{{base_url}}/api/chatbot/compare/"
+          }
+        }
+      ]
+    }
+  ]
+}

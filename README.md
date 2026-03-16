@@ -1,118 +1,229 @@
-# Candidate AI Backend
+# AI Candidate Recommendation System
 
-Django backend for an AI hiring assistant system with:
+Django backend for an AI-assisted hiring workflow that helps recruiters:
 
-- Django auth for recruiters
-- relational data in SQLite/PostgreSQL
-- vector search in Qdrant
-- CV parsing and candidate indexing
-- chatbot-style candidate search endpoint with summary response
+- create and manage jobs
+- collect candidate applications and resumes
+- parse resume text
+- generate embeddings
+- store candidate vectors in Qdrant
+- search and rank candidates for a hiring query
+- expose the workflow through chatbot APIs and a Vapi voice assistant webhook
 
-## Stack
+## Features
 
+- Recruiter authentication
+- Job CRUD APIs
+- Candidate application API with PDF resume upload
+- Resume text extraction
+- Embedding support through `placeholder`, `ollama`, or `openai`
+- Qdrant-based semantic candidate search
+- Skill-aware reranking
+- Candidate comparison and summary endpoints
+- Vapi webhook integration for voice-driven recruiter queries
+- Basic dashboard/reporting endpoint
+
+## Tech Stack
+
+- Python
 - Django
 - PostgreSQL or SQLite
 - Qdrant
-- GPT-5-mini as the planned assistant response model
+- Ollama or OpenAI for embeddings
+- OpenAI for assistant-style responses
+- Vapi for voice assistant integration
 
-## Embeddings
+## Architecture
 
-The project supports these embedding providers through environment settings:
+This project uses two data stores:
 
-- `placeholder`
-- `ollama`
-- `openai`
+- PostgreSQL or SQLite for application data such as users, jobs, and candidates
+- Qdrant for vector embeddings and semantic search
 
-Example `.env` values:
+High-level flow:
 
-```env
-EMBEDDING_PROVIDER=placeholder
-EMBEDDING_MODEL=gpt-5-mini
+1. A recruiter creates a job.
+2. A candidate uploads a resume.
+3. The backend extracts resume text.
+4. The text is converted into embeddings.
+5. Candidate vectors are stored in Qdrant.
+6. A recruiter query is embedded and searched against indexed candidates.
+7. Results are reranked and returned as a structured answer.
 
-# For OpenAI
-OPENAI_API_KEY=
+## Project Structure
 
-# For Ollama
-OLLAMA_BASE_URL=http://localhost:11434
+```text
+candidate-ai-project/
+├── candidate_ai/
+├── apps/
+│   ├── accounts/
+│   ├── ai/
+│   ├── candidates/
+│   ├── chatbot/
+│   ├── jobs/
+│   └── vapi/
+├── docs/
+├── manage.py
+├── requirements.txt
+└── .env.example
 ```
 
-## Assistant Responses
+## Environment Configuration
 
-The project supports:
-
-- `ASSISTANT_PROVIDER=placeholder`
-- `ASSISTANT_PROVIDER=openai`
-
-Example OpenAI config:
-
-```env
-ASSISTANT_PROVIDER=openai
-ASSISTANT_MODEL=gpt-5-mini
-OPENAI_API_KEY=your_key_here
-```
-
-## Setup
-
-1. Install dependencies:
-
-```powershell
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-2. Copy env file:
+Copy the example file and set your own values:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-3. Choose database mode in `.env`:
+Important:
 
-- For quick local work:
+- `.env` is intentionally not committed
+- do not publish API keys, passwords, or private hostnames
+- use your own local or deployment-specific values
+
+Main environment groups:
+
+- Django settings
+- database settings
+- Qdrant settings
+- embedding provider settings
+- assistant provider settings
+- Vapi settings
+
+See [.env.example](.env.example) for the full template.
+
+## Local Setup
+
+1. Create and activate a virtual environment.
+2. Install dependencies:
+
+```powershell
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+3. Copy the environment template:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+4. Choose a database in `.env`:
+
+- quick local setup:
   - `DJANGO_DB_ENGINE=sqlite`
-- For project target setup:
+- recommended project setup:
   - `DJANGO_DB_ENGINE=postgres`
-  - set `DJANGO_DB_NAME`, `DJANGO_DB_USER`, `DJANGO_DB_PASSWORD`, `DJANGO_DB_HOST`, `DJANGO_DB_PORT`
 
-4. Run migrations:
-
-```powershell
-.venv\Scripts\python.exe manage.py migrate
-```
-
-5. Start Django:
-
-```powershell
-.venv\Scripts\python.exe manage.py runserver
-```
-
-## Qdrant
-
-Run Qdrant locally with Docker:
+5. Start Qdrant locally:
 
 ```powershell
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-Qdrant config comes from:
+6. If using Ollama embeddings, make sure Ollama is running:
 
-- `QDRANT_URL`
-- `QDRANT_COLLECTION`
+```powershell
+ollama serve
+```
 
-## Important API paths
+7. Run migrations:
 
-- `/api/health/`
-- `/api/auth/register/`
-- `/api/auth/login/`
-- `/api/auth/me/`
-- `/api/jobs/`
-- `/api/jobs/dashboard/`
-- `/api/candidates/`
-- `/api/candidates/apply/`
-- `/api/chatbot/search/`
-- `/api/vapi/hiring-assistant/`
+```powershell
+.venv\Scripts\python.exe manage.py migrate
+```
 
-## Recommended next steps
+8. Start the Django server:
 
-- switch DB from SQLite to PostgreSQL
-- connect a real embedding provider
-- connect GPT-5-mini or another LLM provider for richer explanations
+```powershell
+.venv\Scripts\python.exe manage.py runserver
+```
+
+## Supported Providers
+
+### Embeddings
+
+- `placeholder`
+- `ollama`
+- `openai`
+
+### Assistant Responses
+
+- `placeholder`
+- `openai`
+
+## Core API Endpoints
+
+### System
+
+- `GET /api/health/`
+
+### Authentication
+
+- `POST /api/auth/register/`
+- `POST /api/auth/login/`
+- `POST /api/auth/logout/`
+- `GET /api/auth/me/`
+
+### Jobs
+
+- `GET /api/jobs/`
+- `POST /api/jobs/`
+- `GET /api/jobs/dashboard/`
+- `GET /api/jobs/<job_id>/`
+- `PATCH /api/jobs/<job_id>/`
+- `DELETE /api/jobs/<job_id>/`
+
+### Candidates
+
+- `GET /api/candidates/`
+- `POST /api/candidates/apply/`
+- `GET /api/candidates/<candidate_id>/summary/`
+
+### Chatbot
+
+- `POST /api/chatbot/search/`
+- `POST /api/chatbot/compare/`
+
+### Vapi
+
+- `GET /api/vapi/hiring-assistant/`
+- `POST /api/vapi/hiring-assistant/`
+
+For request bodies and Postman examples, see:
+
+- [docs/API_TESTING.md](docs/API_TESTING.md)
+- [docs/postman/Candidate-AI-Backend.postman_collection.json](docs/postman/Candidate-AI-Backend.postman_collection.json)
+
+## Public Repository Safety
+
+These files are intentionally excluded from Git:
+
+- `.env`
+- `.venv/`
+- `db.sqlite3`
+- `media/`
+- `ngrok.exe`
+
+Do not commit:
+
+- OpenAI keys
+- database passwords
+- private ngrok URLs if you do not want them public
+- production secrets
+- local uploaded resumes
+
+## Notes
+
+- PDF upload is currently enforced for candidate resumes.
+- Candidate search supports both `job_id` and `job_title`.
+- Voice assistant behavior depends on Vapi, your configured voice model, and your `.env` values.
+
+## Documentation
+
+- [docs/PROJECT_DOCUMENTATION.md](docs/PROJECT_DOCUMENTATION.md)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+## License
+
+No license file is included in this repository yet.

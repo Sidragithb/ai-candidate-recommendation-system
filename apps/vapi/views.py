@@ -169,6 +169,9 @@ def _candidate_summary(candidate: Candidate) -> dict:
         "job_title": candidate.job.title,
         "skills": skills,
         "vector_indexed": candidate.vector_indexed,
+        "education_level": candidate.education_level,
+        "degree_title": candidate.degree_title,
+        "education_institution": candidate.education_institution,
         "resume_excerpt": excerpt or "No resume text available.",
     }
 

@@ -46,17 +46,38 @@ class EmbeddingService:
         return payload["data"][0]["embedding"]
 
     def _embed_with_ollama(self, text: str) -> list[float]:
-        response = httpx.post(
-            f"{settings.OLLAMA_BASE_URL}/api/embeddings",
-            json={
-                "model": settings.EMBEDDING_MODEL,
-                "prompt": text,
-            },
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return payload["embedding"]
+        attempts = [text]
+        if len(text) > 12000:
+            attempts.append(text[:12000])
+        if len(text) > 6000:
+            attempts.append(text[:6000])
+        if len(text) > 3000:
+            attempts.append(text[:3000])
+
+        last_error = None
+        seen_lengths = set()
+        for attempt_text in attempts:
+            if len(attempt_text) in seen_lengths:
+                continue
+            seen_lengths.add(len(attempt_text))
+            try:
+                response = httpx.post(
+                    f"{settings.OLLAMA_BASE_URL}/api/embeddings",
+                    json={
+                        "model": settings.EMBEDDING_MODEL,
+                        "prompt": attempt_text,
+                    },
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return payload["embedding"]
+            except httpx.HTTPError as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("Failed to generate Ollama embedding.")
 
     @property
     def provider(self) -> str:

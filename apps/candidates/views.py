@@ -1,61 +1,34 @@
-import hashlib
-import re
 from pathlib import Path
 
-from django.core.files.base import ContentFile
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
-from apps.ai.services.document_parser import DocumentParserService
-from apps.ai.services.embedding import EmbeddingService
-from apps.ai.services.vector_store import VectorSearchService
+from apps.accounts.permissions import require_authenticated, scoped_candidates, scoped_jobs
+from apps.ai.services.ingestion import ConflictError, ResumeIngestionService
+from apps.ai.services.text import split_skills
+from apps.ai.tasks import process_candidate_resume_task
 from apps.candidates.models import Candidate
 from apps.jobs.models import Job
 
-ALLOWED_RESUME_EXTENSIONS = {".pdf"}
-
 
 @require_GET
+@require_authenticated
 def candidate_list_view(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({"detail": "Authentication required."}, status=401)
-
     job_id = request.GET.get("job_id")
-    candidates = Candidate.objects.select_related("job").filter(job__recruiter=request.user)
+    candidates = scoped_candidates(request.user, Candidate.objects.select_related("job"))
     if job_id:
         candidates = candidates.filter(job_id=job_id)
 
-    data = [
-        {
-            "id": candidate.id,
-            "full_name": candidate.full_name,
-            "email": candidate.email,
-            "skills": _split_skills(candidate.skills),
-            "job_id": candidate.job_id,
-            "resume_file": candidate.resume_file.url if candidate.resume_file else None,
-            "vector_indexed": candidate.vector_indexed,
-            "estimated_years_experience": float(candidate.estimated_years_experience),
-            "experience_score": float(candidate.experience_score),
-            "education_level": candidate.education_level,
-            "education_score": float(candidate.education_score),
-            "created_at": candidate.created_at.isoformat(),
-        }
-        for candidate in candidates.order_by("-created_at")
-    ]
+    data = [_serialize_candidate(candidate) for candidate in candidates.order_by("-created_at")]
     return JsonResponse({"candidates": data})
 
 
 @require_GET
+@require_authenticated
 def candidate_summary_view(request, candidate_id: int):
-    if not request.user.is_authenticated:
-        return JsonResponse({"detail": "Authentication required."}, status=401)
-
     try:
-        candidate = Candidate.objects.select_related("job").get(
-            id=candidate_id,
-            job__recruiter=request.user,
-        )
+        candidate = scoped_candidates(request.user, Candidate.objects.select_related("job")).get(id=candidate_id)
     except Candidate.DoesNotExist:
         return JsonResponse({"detail": "Candidate not found."}, status=404)
 
@@ -65,30 +38,33 @@ def candidate_summary_view(request, candidate_id: int):
 
     return JsonResponse(
         {
-            "candidate": {
-                "id": candidate.id,
-                "full_name": candidate.full_name,
-                "email": candidate.email,
-                "skills": _split_skills(candidate.skills),
-                "job_id": candidate.job_id,
-                "job_title": candidate.job.title,
-                "vector_indexed": candidate.vector_indexed,
-                "estimated_years_experience": float(candidate.estimated_years_experience),
-                "experience_score": float(candidate.experience_score),
-                "education_level": candidate.education_level,
-                "education_score": float(candidate.education_score),
-                "created_at": candidate.created_at.isoformat(),
-            },
+            "candidate": _serialize_candidate(candidate),
             "summary": {
                 "headline": f"{candidate.full_name} applied for {candidate.job.title}.",
-                "skills_summary": ", ".join(_split_skills(candidate.skills)) or "No skills listed.",
-                "resume_excerpt": resume_excerpt or "No resume text available.",
+                "skills_summary": ", ".join(candidate.parsed_skills or split_skills(candidate.skills)) or "No skills listed.",
+                "resume_excerpt": resume_excerpt or "Resume is still processing.",
                 "experience_summary": (
                     f"Estimated experience: {candidate.estimated_years_experience} years."
                     if candidate.estimated_years_experience
                     else "Estimated experience not detected."
                 ),
-                "education_summary": candidate.education_level or "Education level not detected.",
+                "education_summary": (
+                    " | ".join(
+                        part
+                        for part in [
+                            candidate.education_level,
+                            candidate.degree_title,
+                            candidate.education_institution,
+                        ]
+                        if part
+                    )
+                    or "Education details not detected."
+                ),
+                "fit_summary": {
+                    "fit_score": float(candidate.fit_score),
+                    "reasons": list(candidate.ranking_reasons or []),
+                    "breakdown": dict(candidate.fit_breakdown or {}),
+                },
             },
         }
     )
@@ -113,133 +89,106 @@ def candidate_apply_view(request):
     except Job.DoesNotExist:
         return JsonResponse({"detail": "Job not found."}, status=404)
 
-    if Candidate.objects.filter(job=job, email__iexact=email).exists():
-        return JsonResponse(
-            {"detail": "A candidate with this email has already applied for this job."},
-            status=409,
+    try:
+        candidate = ResumeIngestionService().create_candidate(
+            job=job,
+            full_name=full_name,
+            email=email,
+            skills=skills,
+            resume_name=resume.name,
+            file_bytes=resume.read(),
         )
+    except ConflictError as exc:
+        return JsonResponse({"detail": str(exc)}, status=409)
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
 
-    resume_extension = Path(resume.name).suffix.lower()
-    if resume_extension not in ALLOWED_RESUME_EXTENSIONS:
-        return JsonResponse(
-            {"detail": "Unsupported resume format. Only PDF resumes are allowed."},
-            status=400,
-        )
-
-    file_bytes = resume.read()
-    resume_hash = hashlib.sha256(file_bytes).hexdigest()
-    if Candidate.objects.filter(job=job, resume_hash=resume_hash).exists():
-        return JsonResponse(
-            {"detail": "This resume content has already been uploaded for this job."},
-            status=409,
-        )
-
-    candidate = Candidate(
-        job=job,
-        full_name=full_name,
-        email=email,
-        skills=skills,
-        resume_hash=resume_hash,
+    _enqueue_candidate_processing(candidate.id)
+    return JsonResponse(
+        {
+            "detail": "Resume upload accepted and queued for background processing.",
+            "candidate": _serialize_candidate(candidate),
+        },
+        status=202,
     )
 
-    candidate.resume_file.save(resume.name, ContentFile(file_bytes), save=False)
-    resume_text = DocumentParserService().extract_text(resume.name, file_bytes)
-    candidate.resume_text = resume_text
 
-    if not resume_text.strip():
-        return JsonResponse(
-            {"detail": "Could not extract readable text from the uploaded resume."},
-            status=400,
-        )
+@csrf_exempt
+@require_POST
+@require_authenticated
+def candidate_bulk_upload_view(request):
+    job_id = request.POST.get("job_id")
+    if not job_id:
+        return JsonResponse({"detail": "job_id is required."}, status=400)
 
-    years_experience = _estimate_years_experience(resume_text)
-    education_level = _detect_education_level(resume_text)
-    candidate.estimated_years_experience = years_experience
-    candidate.experience_score = _experience_score(years_experience)
-    candidate.education_level = education_level
-    candidate.education_score = _education_score(education_level)
+    try:
+        job = scoped_jobs(request.user, Job.objects.all()).get(id=job_id)
+    except Job.DoesNotExist:
+        return JsonResponse({"detail": "Job not found."}, status=404)
 
-    candidate.save()
+    resumes = request.FILES.getlist("resumes")
+    if not resumes:
+        return JsonResponse({"detail": "At least one resume file is required."}, status=400)
 
-    if resume_text:
-        combined_text = "\n".join(filter(None, [candidate.full_name, candidate.skills, candidate.resume_text]))
-        embedding = EmbeddingService().embed_text(combined_text)
+    created: list[dict] = []
+    errors: list[dict] = []
+    for resume in resumes:
+        base_name = Path(resume.name).stem.replace("_", " ").replace("-", " ").strip() or "Unknown Candidate"
+        email = f"{Path(resume.name).stem.lower().replace(' ', '.')}@pending.local"
         try:
-            VectorSearchService().index_candidate(
-                candidate_id=candidate.id,
-                job_id=candidate.job_id,
-                full_name=candidate.full_name,
-                email=candidate.email,
-                skills=_split_skills(candidate.skills),
-                resume_text=candidate.resume_text,
-                years_experience=float(candidate.estimated_years_experience),
-                experience_score=float(candidate.experience_score),
-                education_level=candidate.education_level,
-                education_score=float(candidate.education_score),
-                embedding=embedding,
+            candidate = ResumeIngestionService().create_candidate(
+                job=job,
+                full_name=base_name.title(),
+                email=email[:200],
+                skills="",
+                resume_name=resume.name,
+                file_bytes=resume.read(),
             )
-            candidate.vector_indexed = True
-            candidate.save(update_fields=["vector_indexed"])
-        except Exception:
-            pass
+            _enqueue_candidate_processing(candidate.id)
+            created.append(_serialize_candidate(candidate))
+        except Exception as exc:
+            errors.append({"file": resume.name, "detail": str(exc)})
 
     return JsonResponse(
         {
-            "id": candidate.id,
-            "full_name": candidate.full_name,
-            "email": candidate.email,
-            "skills": _split_skills(candidate.skills),
-            "job_id": candidate.job_id,
-            "vector_indexed": candidate.vector_indexed,
-            "estimated_years_experience": float(candidate.estimated_years_experience),
-            "experience_score": float(candidate.experience_score),
-            "education_level": candidate.education_level,
-            "education_score": float(candidate.education_score),
+            "detail": "Bulk upload request processed.",
+            "created_count": len(created),
+            "error_count": len(errors),
+            "created": created,
+            "errors": errors,
         },
-        status=201,
+        status=202,
     )
 
 
-def _split_skills(value: str) -> list[str]:
-    return [item.strip() for item in value.split(",") if item.strip()]
+def _enqueue_candidate_processing(candidate_id: int) -> None:
+    if process_candidate_resume_task.app.conf.task_always_eager:
+        process_candidate_resume_task.apply(args=[candidate_id])
+    else:
+        process_candidate_resume_task.delay(candidate_id)
 
 
-def _estimate_years_experience(resume_text: str) -> float:
-    text = resume_text.lower()
-    numeric_matches = re.findall(r"(\d+(?:\.\d+)?)\+?\s+years?", text)
-    if numeric_matches:
-        return max(float(value) for value in numeric_matches)
-
-    start_years = [int(value) for value in re.findall(r"\b(19\d{2}|20\d{2})\b", text)]
-    if len(start_years) >= 2:
-        span = max(start_years) - min(start_years)
-        return float(max(span, 0))
-    return 0.0
-
-
-def _experience_score(years_experience: float) -> float:
-    return min(round(years_experience / 6.0, 3), 1.0)
-
-
-def _detect_education_level(resume_text: str) -> str:
-    text = resume_text.lower()
-    if any(token in text for token in ["phd", "doctor of philosophy"]):
-        return "PhD"
-    if any(token in text for token in ["master", "msc", "ms ", "m.s.", "mba"]):
-        return "Masters"
-    if any(token in text for token in ["bachelor", "bs ", "b.s.", "bsc", "b.s", "b.e", "be "]):
-        return "Bachelors"
-    if any(token in text for token in ["intermediate", "college", "fsc", "a-level"]):
-        return "Intermediate"
-    return ""
-
-
-def _education_score(education_level: str) -> float:
-    score_map = {
-        "PhD": 1.0,
-        "Masters": 0.85,
-        "Bachelors": 0.7,
-        "Intermediate": 0.4,
-        "": 0.0,
+def _serialize_candidate(candidate: Candidate) -> dict:
+    return {
+        "id": candidate.id,
+        "full_name": candidate.full_name,
+        "email": candidate.email,
+        "skills": candidate.parsed_skills or split_skills(candidate.skills),
+        "job_id": candidate.job_id,
+        "job_title": candidate.job.title if hasattr(candidate, "job") else None,
+        "resume_file": candidate.resume_file.url if candidate.resume_file else None,
+        "vector_indexed": candidate.vector_indexed,
+        "processing_status": candidate.processing_status,
+        "processing_error": candidate.processing_error,
+        "estimated_years_experience": float(candidate.estimated_years_experience),
+        "experience_score": float(candidate.experience_score),
+        "education_level": candidate.education_level,
+        "degree_title": candidate.degree_title,
+        "education_institution": candidate.education_institution,
+        "education_score": float(candidate.education_score),
+        "fit_score": float(candidate.fit_score),
+        "fit_breakdown": dict(candidate.fit_breakdown or {}),
+        "ranking_reasons": list(candidate.ranking_reasons or []),
+        "created_at": candidate.created_at.isoformat(),
+        "last_processed_at": candidate.last_processed_at.isoformat() if candidate.last_processed_at else None,
     }
-    return score_map.get(education_level, 0.0)

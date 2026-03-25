@@ -1,17 +1,18 @@
 import json
 
-from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from apps.accounts.permissions import require_authenticated, scoped_candidates, scoped_jobs
 from apps.ai.services.assistant import AssistantResponseService
-from apps.ai.services.embedding import EmbeddingService
-from apps.ai.services.vector_store import VectorSearchService
+from apps.ai.services.hybrid_search import HybridSearchService
+from apps.ai.services.text import infer_education_level, split_skills, tokenize_keywords
 from apps.candidates.models import Candidate
 from apps.jobs.models import Job
 
 
 @csrf_exempt
+@require_authenticated
 def search_candidates_view(request):
     if request.method != "POST":
         return JsonResponse({"detail": "Use POST."}, status=405)
@@ -19,50 +20,42 @@ def search_candidates_view(request):
     payload = json.loads(request.body or "{}")
     query = str(payload.get("query", "")).strip()
     job_id = payload.get("job_id")
-    job_title = str(payload.get("job_title", "")).strip()
     limit = int(payload.get("limit", 5))
 
     if not query:
         return JsonResponse({"detail": "Query is required."}, status=400)
-    resolved_job_id, resolved_job_title = _resolve_job_reference(job_id=job_id, job_title=job_title)
-    if job_id is not None or job_title:
-        if resolved_job_id is None:
-            return JsonResponse({"detail": "Job not found for the provided job_id or job_title."}, status=404)
 
-    embedding = EmbeddingService().embed_text(query)
-    try:
-        matches = VectorSearchService().search_candidates(
-            query_embedding=embedding,
-            query_text=query,
-            job_id=resolved_job_id,
-            limit=limit,
-        )
-        data = [match.model_dump() for match in matches]
-    except Exception:
-        matches = []
-        data = []
+    job = None
+    if job_id is not None:
+        try:
+            job = scoped_jobs(request.user, Job.objects.all()).get(id=job_id)
+        except Job.DoesNotExist:
+            return JsonResponse({"detail": "Job not found."}, status=404)
 
+    matches = HybridSearchService().search(query=query, job=job, limit=limit)
     response_payload = AssistantResponseService().build_response(
         query=query,
         matches=matches,
-        job_id=resolved_job_id,
+        job_id=job.id if job else None,
     )
 
     return JsonResponse(
         {
             "query": query,
-            "job_id": resolved_job_id,
-            "job_title": resolved_job_title,
-            "matches": data,
+            "job_id": job.id if job else None,
+            "job_title": job.title if job else None,
+            "matches": [match.model_dump() for match in matches],
             "answer": response_payload["answer"],
             "summary": response_payload["summary"],
             "assistant_provider": response_payload["provider"],
             "assistant_model": response_payload["model"],
+            "cached": response_payload.get("cached", False),
         }
     )
 
 
 @csrf_exempt
+@require_authenticated
 def compare_candidates_view(request):
     if request.method != "POST":
         return JsonResponse({"detail": "Use POST."}, status=405)
@@ -78,18 +71,24 @@ def compare_candidates_view(request):
         )
 
     candidates = list(
-        Candidate.objects.filter(id__in=candidate_ids)
-        .select_related("job")
-        .order_by("id")
+        scoped_candidates(request.user, Candidate.objects.filter(id__in=candidate_ids).select_related("job")).order_by("id")
     )
     if len(candidates) < 2:
         return JsonResponse({"detail": "Not enough valid candidates found."}, status=404)
 
-    query_terms = _extract_query_terms(query)
+    query_terms = set(tokenize_keywords(query))
+    education_query = _parse_education_query(query)
+    is_education_query = bool(education_query["levels"] or education_query["fields"])
     comparison_rows = []
     for candidate in candidates:
-        skills = [item.strip() for item in candidate.skills.split(",") if item.strip()]
-        matched_skills = [skill for skill in skills if _skill_matches_query(skill, query_terms)]
+        skills = candidate.parsed_skills or split_skills(candidate.skills)
+        matched_skills = [] if is_education_query else [skill for skill in skills if skill.lower() in query_terms]
+        matched_education = _candidate_education_hits(candidate, education_query)
+        match_score = (
+            round(len(matched_education) / max(len(education_query["levels"]) + len(education_query["fields"]), 1), 4)
+            if is_education_query
+            else round(len(matched_skills) / max(len(query_terms), 1), 4)
+        )
         comparison_rows.append(
             {
                 "candidate_id": candidate.id,
@@ -98,35 +97,38 @@ def compare_candidates_view(request):
                 "job_title": candidate.job.title,
                 "skills": skills,
                 "matched_skills": matched_skills,
-                "match_score": round(len(matched_skills) / max(len(query_terms), 1), 4),
+                "matched_education": matched_education,
+                "fit_score": float(candidate.fit_score),
+                "match_score": match_score,
                 "vector_indexed": candidate.vector_indexed,
+                "ranking_reasons": list(candidate.ranking_reasons or []),
+                "education_level": candidate.education_level,
+                "degree_title": candidate.degree_title,
+                "education_institution": candidate.education_institution,
             }
         )
 
     ranked = sorted(
         comparison_rows,
-        key=lambda row: (row["match_score"], len(row["skills"]), row["vector_indexed"]),
+        key=lambda row: (row["fit_score"], row["match_score"], row["vector_indexed"]),
         reverse=True,
     )
     best = ranked[0]
     others = ranked[1:]
 
     answer_parts = [
-        f"For '{query}', {best['full_name']} appears strongest based on listed skills and indexed resume data."
+        f"For '{query}', {best['full_name']} is strongest with a fit score of {best['fit_score']:.2f}%.",
     ]
-    if best["skills"]:
-        answer_parts.append(
-            "Top matched skills: "
-            + (", ".join(best["matched_skills"][:6]) or ", ".join(best["skills"][:6]))
-            + "."
-        )
+    if is_education_query and best["matched_education"]:
+        answer_parts.append("Top education match: " + ", ".join(best["matched_education"][:4]) + ".")
+    elif best["matched_skills"]:
+        answer_parts.append("Top matched skills: " + ", ".join(best["matched_skills"][:6]) + ".")
+    if best["ranking_reasons"]:
+        answer_parts.append("Why selected: " + " ".join(best["ranking_reasons"][:2]))
     if others:
         answer_parts.append(
-            "Compared candidates: "
-            + ", ".join(
-                f"{candidate['full_name']} ({', '.join(candidate['skills'][:3]) or 'no listed skills'})"
-                for candidate in others
-            )
+            "Alternatives: "
+            + ", ".join(f"{candidate['full_name']} ({candidate['fit_score']:.2f}%)" for candidate in others[:3])
             + "."
         )
 
@@ -140,76 +142,37 @@ def compare_candidates_view(request):
     )
 
 
-def _extract_query_terms(query_text: str) -> set[str]:
-    stop_words = {
-        "best",
-        "candidate",
-        "candidates",
-        "compare",
-        "for",
-        "the",
-        "and",
-        "with",
-        "job",
-    }
-    cleaned = query_text.replace(",", " ").replace("/", " ").lower()
-    return {
-        token.strip()
-        for token in cleaned.split()
-        if token.strip() and token.strip() not in stop_words
-    }
+def _parse_education_query(query: str) -> dict:
+    lowered = query.lower()
+    levels = set()
+    if "bachelor" in lowered or "bachelors" in lowered or "bsc" in lowered or "bs " in f"{lowered} ":
+        levels.add("Bachelors")
+    if "master" in lowered or "masters" in lowered or "msc" in lowered or "mba" in lowered:
+        levels.add("Masters")
+    if "phd" in lowered:
+        levels.add("PhD")
+
+    fields = set()
+    for phrase in ("computer science", "software engineering", "information technology", "computing"):
+        if phrase in lowered:
+            fields.add(phrase)
+    return {"levels": levels, "fields": fields}
 
 
-def _skill_matches_query(skill: str, query_terms: set[str]) -> bool:
-    normalized_skill = skill.lower().strip()
-    if not query_terms:
-        return False
-    if normalized_skill in query_terms:
-        return True
-    return any(term in normalized_skill or normalized_skill in term for term in query_terms)
-
-
-def _resolve_job_reference(job_id=None, job_title: str = "") -> tuple[int | None, str | None]:
-    if job_id is not None:
-        try:
-            job = Job.objects.get(id=job_id)
-            return job.id, job.title
-        except Job.DoesNotExist:
-            return None, None
-
-    if job_title:
-        normalized_title = " ".join(job_title.lower().split())
-        title_terms = [term for term in normalized_title.split() if term]
-        filters = Q(title__iexact=job_title) | Q(title__icontains=job_title)
-        for term in title_terms:
-            filters |= Q(title__icontains=term)
-
-        jobs = list(
-            Job.objects.filter(filters)
-            .annotate(
-                candidate_count=Count("candidates", distinct=True),
-                indexed_candidate_count=Count(
-                    "candidates",
-                    filter=Q(candidates__vector_indexed=True),
-                    distinct=True,
-                ),
-            )
-            .order_by("-created_at")
-        )
-        if jobs:
-            jobs.sort(
-                key=lambda job: (
-                    job.indexed_candidate_count,
-                    job.candidate_count,
-                    normalized_title in " ".join(job.title.lower().split()),
-                    sum(term in job.title.lower() for term in title_terms),
-                    " ".join(job.title.lower().split()) == normalized_title,
-                    job.created_at,
-                ),
-                reverse=True,
-            )
-            selected_job = jobs[0]
-            return selected_job.id, selected_job.title
-        return None, None
-
-    return None, None
+def _candidate_education_hits(candidate: Candidate, education_query: dict) -> list[str]:
+    hits: list[str] = []
+    degree = (candidate.degree_title or "").strip()
+    institution = (candidate.education_institution or "").strip()
+    level = candidate.education_level or infer_education_level(degree)
+    if education_query["levels"] and level in education_query["levels"]:
+        hits.append(level)
+    lowered_degree = degree.lower()
+    lowered_institution = institution.lower()
+    for field in education_query["fields"]:
+        if field in lowered_degree and degree:
+            hits.append(degree)
+            break
+        if field in lowered_institution and institution:
+            hits.append(institution)
+            break
+    return hits

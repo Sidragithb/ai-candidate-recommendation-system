@@ -215,9 +215,16 @@ The project successfully retrieves and ranks candidates based on recruiter queri
 
 ## Future Improvements
 
-- improve ranking with a more advanced scoring model
-- add frontend dashboard
-- add admin analytics and reporting
+- improve AI-based resume understanding for more accurate skills, experience, and education extraction
+- show candidate fit score (%) for every candidate against each job
+- implement hybrid search that combines semantic similarity with keyword matching
+- add explainable ranking so the system clearly states why a candidate matched
+- support bulk CV upload for recruiters managing many applicants at once
+- expand recruiter dashboard with total applicants, top candidates, and hiring stats
+- strengthen background processing so CV uploads remain fast while parsing runs asynchronously
+- enhance duplicate CV detection to reduce repeated processing and noisy candidate data
+- enforce role-based access control for Admin and Recruiter users
+- keep the deployment stack production-ready with secure and scalable server infrastructure
 
 ## Conclusion
 

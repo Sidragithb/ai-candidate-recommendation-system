@@ -1,113 +1,78 @@
 # Production Deployment Guide
 
-## Goal
+## Stack
 
-This project can run locally with Django's development server, but production deployment should use:
+Production should run with:
 
-- a real web server
-- PostgreSQL
-- Qdrant
-- Ollama or OpenAI embeddings
-- HTTPS-aware Django settings
+- Django served by Gunicorn
+- Nginx as reverse proxy
+- PostgreSQL for relational data
+- Redis for Celery and cache
+- Qdrant for semantic search
+- Celery worker for background parsing/indexing
 
-## Required Services
-
-- Django application server
-- PostgreSQL database
-- Qdrant vector database
-- Ollama service if using local embeddings
-- ngrok is only for local webhook testing, not production
-
-## Recommended Environment Settings
+## Required Environment
 
 ```env
 DJANGO_DEBUG=false
 DJANGO_ALLOWED_HOSTS=your-domain.com,.your-domain.com
-DJANGO_CSRF_TRUSTED_ORIGINS=https://your-domain.com,https://sub.your-domain.com
+DJANGO_CSRF_TRUSTED_ORIGINS=https://your-domain.com
 DJANGO_SECURE_SSL_REDIRECT=true
 DJANGO_SESSION_COOKIE_SECURE=true
 DJANGO_CSRF_COOKIE_SECURE=true
 DJANGO_USE_X_FORWARDED_PROTO=true
-```
 
-## Database
-
-Use PostgreSQL in production:
-
-```env
 DJANGO_DB_ENGINE=postgres
 DJANGO_DB_NAME=candidate_ai
 DJANGO_DB_USER=postgres
-DJANGO_DB_PASSWORD=your_password
-DJANGO_DB_HOST=localhost
+DJANGO_DB_PASSWORD=change-me
+DJANGO_DB_HOST=postgres
 DJANGO_DB_PORT=5432
-```
 
-## Vector Database
+REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/0
 
-Qdrant should be reachable from the Django server:
-
-```env
-QDRANT_URL=http://localhost:6333
+QDRANT_URL=http://qdrant:6333
 QDRANT_COLLECTION=candidate_embeddings
 ```
 
-## Embeddings
+## Services
 
-### Ollama
+`docker-compose.yml` includes:
 
-```env
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=nomic-embed-text
-OLLAMA_BASE_URL=http://localhost:11434
+- `web`: Django + Gunicorn
+- `celery`: background worker
+- `nginx`: static/media + reverse proxy
+- `postgres`: relational database
+- `redis`: cache and broker
+- `qdrant`: vector database
+
+## Deploy
+
+```powershell
+docker compose up --build
 ```
 
-### OpenAI
+Entrypoint behavior:
 
-```env
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=text-embedding-3-small
-OPENAI_API_KEY=your_openai_api_key
-```
+- runs migrations
+- collects static files
+- starts the requested process
 
-## Assistant Responses
+## Checklist
 
-```env
-ASSISTANT_PROVIDER=openai
-ASSISTANT_MODEL=gpt-5-mini
-OPENAI_API_KEY=your_openai_api_key
-```
-
-## Vapi Webhook
-
-Production server URL example:
-
-```text
-https://your-domain.com/api/vapi/hiring-assistant/
-```
-
-Make sure:
-
-- the webhook URL is publicly reachable
-- HTTPS is enabled
-- the domain is included in `DJANGO_ALLOWED_HOSTS`
-- the domain is included in `DJANGO_CSRF_TRUSTED_ORIGINS` if needed
-
-## Deployment Checklist
-
-1. Set `DJANGO_DEBUG=false`
-2. Configure PostgreSQL
-3. Configure Qdrant
-4. Configure embeddings provider
-5. Configure OpenAI assistant provider if needed
-6. Run migrations
-7. Restart Django app
-8. Verify `/api/health/`
-9. Verify `/api/vapi/hiring-assistant/`
-10. Test candidate upload and chatbot search
+1. Set secure Django env vars.
+2. Point app to PostgreSQL, Redis, and Qdrant.
+3. Configure embedding/parser providers.
+4. Run `docker compose up --build`.
+5. Verify `GET /api/health/`.
+6. Create a job and confirm embedding gets generated.
+7. Upload single and bulk resumes and confirm Celery processes them.
+8. Test `POST /api/chatbot/search/` for hybrid/explainable ranking.
 
 ## Notes
 
-- Rotate any API keys that were exposed during development
-- Do not use Django `runserver` in production
-- Keep media storage and DB backups enabled
+- Do not use `runserver` in production.
+- Redis is required for background processing and search caching.
+- If OpenAI is not configured, the app falls back to heuristic parsing and placeholder embeddings.

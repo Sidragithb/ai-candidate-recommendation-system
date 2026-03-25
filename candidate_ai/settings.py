@@ -1,4 +1,5 @@
 import os
+from importlib.util import find_spec
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -95,6 +96,7 @@ USE_TZ = True
 STATIC_URL = "static/"
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / os.getenv("DJANGO_MEDIA_ROOT", "media")
+STATIC_ROOT = BASE_DIR / os.getenv("DJANGO_STATIC_ROOT", "staticfiles")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 CSRF_TRUSTED_ORIGINS = [
@@ -121,6 +123,42 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 ASSISTANT_MODEL = os.getenv("ASSISTANT_MODEL", "gpt-5-mini")
 ASSISTANT_PROVIDER = os.getenv("ASSISTANT_PROVIDER", "placeholder")
+RESUME_PARSER_PROVIDER = os.getenv("RESUME_PARSER_PROVIDER", os.getenv("ASSISTANT_PROVIDER", "placeholder"))
+RESUME_PARSER_MODEL = os.getenv("RESUME_PARSER_MODEL", os.getenv("ASSISTANT_MODEL", "gpt-5-mini"))
+RESUME_EDUCATION_OPENAI_FALLBACK = (
+    os.getenv("RESUME_EDUCATION_OPENAI_FALLBACK", "true").lower() == "true"
+)
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+SEARCH_CACHE_TTL = int(os.getenv("SEARCH_CACHE_TTL", "300"))
+CELERY_TASK_ALWAYS_EAGER = os.getenv("CELERY_TASK_ALWAYS_EAGER", "false").lower() == "true"
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+SEARCH_VECTOR_WEIGHT = float(os.getenv("SEARCH_VECTOR_WEIGHT", "0.45"))
+SEARCH_KEYWORD_WEIGHT = float(os.getenv("SEARCH_KEYWORD_WEIGHT", "0.30"))
+SEARCH_SKILL_WEIGHT = float(os.getenv("SEARCH_SKILL_WEIGHT", "0.15"))
+SEARCH_EXPERIENCE_WEIGHT = float(os.getenv("SEARCH_EXPERIENCE_WEIGHT", "0.05"))
+SEARCH_EDUCATION_WEIGHT = float(os.getenv("SEARCH_EDUCATION_WEIGHT", "0.05"))
+
+if REDIS_URL and find_spec("redis") is not None:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "candidate-ai-cache",
+        }
+    }
+
+LOGIN_URL = "/api/auth/login/"
 VAPI_ASSISTANT_NAME = os.getenv("VAPI_ASSISTANT_NAME", "Hiring Assistant")
 VAPI_VOICE_PROVIDER = os.getenv("VAPI_VOICE_PROVIDER", "openai")
 VAPI_VOICE_ID = os.getenv("VAPI_VOICE_ID", "alloy")

@@ -5,6 +5,9 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
+from apps.accounts.models import UserRole
+from apps.accounts.permissions import ensure_user_profile, get_user_role, is_admin
+
 
 User = get_user_model()
 
@@ -18,6 +21,7 @@ def register_view(request):
     password = str(payload.get("password", "")).strip()
     first_name = str(payload.get("first_name", "")).strip()
     last_name = str(payload.get("last_name", "")).strip()
+    requested_role = str(payload.get("role", "")).strip().lower()
 
     if not username or not password:
         return JsonResponse({"detail": "Username and password are required."}, status=400)
@@ -32,11 +36,23 @@ def register_view(request):
         first_name=first_name,
         last_name=last_name,
     )
+    existing_user_count = User.objects.count()
+    if existing_user_count == 1:
+        role = UserRole.ADMIN
+    elif requested_role == UserRole.ADMIN and request.user.is_authenticated and is_admin(request.user):
+        role = UserRole.ADMIN
+    else:
+        role = UserRole.RECRUITER
+    profile = ensure_user_profile(user)
+    if profile.role != role:
+        profile.role = role
+        profile.save(update_fields=["role"])
     return JsonResponse(
         {
             "id": user.id,
             "username": user.username,
             "email": user.email,
+            "role": role,
         },
         status=201,
     )
@@ -54,11 +70,13 @@ def login_view(request):
         return JsonResponse({"detail": "Invalid credentials."}, status=401)
 
     login(request, user)
+    profile = ensure_user_profile(user)
     return JsonResponse(
         {
             "id": user.id,
             "username": user.username,
             "email": user.email,
+            "role": profile.role,
         }
     )
 
@@ -75,10 +93,12 @@ def current_user_view(request):
     if not request.user.is_authenticated:
         return JsonResponse({"detail": "Authentication required."}, status=401)
 
+    profile = ensure_user_profile(request.user)
     return JsonResponse(
         {
             "id": request.user.id,
             "username": request.user.username,
             "email": request.user.email,
+            "role": profile.role,
         }
     )

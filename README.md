@@ -108,12 +108,12 @@ docker run -p 6333:6333 qdrant/qdrant
 
 ## Production
 
-Included deployment assets:
+The project includes production deployment files such as Docker, Docker Compose, Gunicorn, and Nginx configuration. These files help run the application in a secure, scalable, and production-ready environment.
 
-- [Dockerfile](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/Dockerfile)
-- [docker-compose.yml](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/docker-compose.yml)
-- [gunicorn.conf.py](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/gunicorn.conf.py)
-- [docker/nginx.conf](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/docker/nginx.conf)
+- `Dockerfile`
+- `docker-compose.yml`
+- `gunicorn.conf.py`
+- `docker/nginx.conf`
 
 Bring up the full stack with:
 
@@ -136,5 +136,5 @@ docker compose up --build
 
 ## Docs
 
-- [docs/PROJECT_DOCUMENTATION.md](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/docs/PROJECT_DOCUMENTATION.md)
-- [docs/DEPLOYMENT.md](/c:/Users/SIDRA/Documents/Project/candidate-ai-project/docs/DEPLOYMENT.md)
+- `docs/PROJECT_DOCUMENTATION.md`
+- `docs/DEPLOYMENT.md`
